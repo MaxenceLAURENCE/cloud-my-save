@@ -22,12 +22,14 @@
     },
     "homepage": "https://github.com/MaxenceLAURENCE/cloud-my-save#readme",
     "dependencies": {
+        "archiver": "^8.0.0",
         "dotenv": "^17.4.2",
         "express": "^5.2.1",
         "googleapis": "^174.0.1",
         "open": "^11.0.0"
     },
     "devDependencies": {
+        "@types/archiver": "^8.0.0",
         "@types/express": "^5.0.6",
         "@types/node": "^26.1.2",
         "@types/open": "^6.1.0",

@@ -1,4 +1,5 @@
 import { authenticate, getDriveService } from './auth/googleAuth.js';
+import { runExportCli } from './cli/exportCli.js';
 
 async function main() {
     console.log('🚀 Démarrage du module Backend Google Drive - cloud-my-save');
@@ -10,7 +11,7 @@ async function main() {
         // 2. Initialisation du service Google Drive
         const drive = getDriveService(authClient);
 
-        // 3. Test simple : Récupération des fichiers sur Google Drive
+        // 3. Test de connexion : Récupération des fichiers sur Google Drive
         console.log('📂 Interrogation de Google Drive...');
         const response = await drive.files.list({
             pageSize: 5,
@@ -28,8 +29,11 @@ async function main() {
         }
 
         console.log('\n✅ Authentification Google Drive opérationnelle !');
+
+        // 4. Lancement de l'assistant d'exportation CLI avec l'instance drive authentifiée
+        await runExportCli(drive);
     } catch (error) {
-        console.error('❌ Erreur lors de l\'initialisation Google Drive :', error);
+        console.error('❌ Erreur lors de l\'authentification ou de l\'initialisation Google Drive :', error);
     }
 }
 
