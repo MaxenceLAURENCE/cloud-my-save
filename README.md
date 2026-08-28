@@ -7,7 +7,7 @@ Exemple de jeu : Sims 4 / Scrap mecanic / The Long Drive / Minecraft ...
 **ROADMAP** : 
 - [ ] Backend : en typescript 
     - [x] OAuth avec google drive 
-    - [ ] Exporter une sauvegarde 
+    - [x] Exporter une sauvegarde 
     - [ ] Importer une sauvegarde 
     - [ ] Gestion des version (possible conflit) 
     - [ ] Plusieur jeu en même temps 

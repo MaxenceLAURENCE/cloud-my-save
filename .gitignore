@@ -3,3 +3,5 @@ dist/
 .env
 token.json
 token.enc
+.tmp/
+*.zip

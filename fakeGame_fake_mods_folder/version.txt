@@ -1,0 +1,72 @@
+==================================================
+DOCUMENTATION - BANC D'ESSAI "fakeGame"
+==================================================
+
+Ce répertoire ("fakeGame") sert d'environnement de test pour valider le bon fonctionnement de l'archivage, de l'exportation et de la synchronisation de sauvegardes avec Google Drive.
+
+Il regroupe différents cas particuliers (edge cases) fréquemment rencontrés dans les répertoires de jeux vidéo :
+- Fichiers et dossiers cachés (préfixés par un point).
+- Fichiers et dossiers avec permissions spécifiques (lecture seule, exécutable).
+- Fichiers avec dates de modification anormales (Epoch 1970, an 2000, années futures).
+- Fichiers multimédias binaires (.avif, .gif).
+
+--------------------------------------------------
+UTILISATION DU SCRIPT DE CONTRÔLE verifier_fichiers.sh
+--------------------------------------------------
+Le script `verifier_fichiers.sh` effectue un audit complet du dossier :
+1. Analyse l'ensemble des éléments présents sur le disque (permissions, date mtime, taille).
+2. Contrôle la concordance exacte avec la liste des fichiers ci-dessous.
+3. Retourne un code 0 si tous les éléments attendus sont conformes.
+
+==================================================
+LISTE DES FICHIERS ET DOSSIERS DU JEU DE TEST
+==================================================
+
+--- FICHIERS ET DOSSIERS CACHÉS ---
+.cacher
+  -> Description : Fichier texte caché. Vérifie l'inclusion des fichiers commençant par un point.
+
+.hidden_config.json
+  -> Description : Fichier JSON de configuration caché.
+
+.hidden_folder/
+  -> Description : Dossier caché contenant des sous-fichiers.
+
+.hidden_folder/file_inside_hidden.txt
+  -> Description : Fichier texte situé à l'intérieur d'un dossier caché.
+
+.cache_droits_futur.tmp
+  -> Description : Fichier combinant 3 particularités (caché, permissions en lecture seule 0400, date future 31/12/2099).
+
+--- PERMISSIONS PARTICULIÈRES ---
+fichier_lecture_seule.txt
+  -> Description : Fichier en lecture seule (droits 0444). Doit pouvoir être lu et compressé sans blocage.
+
+fichier_executable.sh
+  -> Description : Script shell exécutable (droits 0755).
+
+dossier_lecture_seule/
+  -> Description : Répertoire en lecture seule (droits 0555). Son contenu doit pouvoir être parcouru et lu.
+
+dossier_lecture_seule/contenu.txt
+  -> Description : Fichier standard stocké dans un répertoire en lecture seule.
+
+--- DATES DE MODIFICATION PARTICULIÈRES (MTIME) ---
+fichier_epoch_1970.txt
+  -> Description : Date fixée au 01/01/1970 00:00:00 UTC (Unix Epoch). Vérifie le support des timestamps anciens.
+
+fichier_an_2000.txt
+  -> Description : Date fixée au 01/01/2000 12:00:00 (passage à l'an 2000).
+
+fichier_futur_2038.txt
+  -> Description : Date fixée au 19/01/2038 03:14:07 (limite 32-bit timestamp Y2K38).
+
+fichier_futur_2099.txt
+  -> Description : Date fixée au 31/12/2099 23:59:59 (date future lointaine).
+
+--- FICHIERS MULTIMÉDIAS (BINAIRES) ---
+linux-vs-windows.avif
+  -> Description : Image binaire au format moderne AVIF (7.4 Ko).
+
+rickroll-roll.gif
+  -> Description : Image animée GIF binaire (264 Ko).

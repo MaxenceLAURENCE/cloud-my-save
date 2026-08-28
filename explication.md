@@ -26,10 +26,15 @@ cloud-my-save/
 ├── src/
 │   ├── auth/
 │   │   └── googleAuth.ts
+│   ├── cli/
+│   │   └── exportCli.ts
 │   ├── config/
 │   │   └── googleConfig.ts
+│   ├── services/
+│   │   └── driveService.ts
 │   ├── utils/
-│   │   └── cryptoUtils.ts
+│   │   ├── cryptoUtils.ts
+│   │   └── zipUtils.ts
 │   └── index.ts
 ├── token.enc
 └── tsconfig.json
@@ -65,6 +70,8 @@ cloud-my-save/
     * `dist/` (code compilé généré automatiquement)
     * `.env` (données confidentielles)
     * `token.enc` & `token.json` (jetons d'accès utilisateur Google chiffrés ou bruts)
+    * `.tmp/` (fichiers zip temporaires créés lors de la compression avant upload)
+    * `*.zip` (archives de sauvegarde)
 
 #### 8. `.prettierrc` (Conventions de formatage)
 * **À quoi il sert :** Configure les règles de formatage de Prettier (ex: dans VS Code) pour imposer l'utilisation d'une indentation fixe de **4 espaces**.
@@ -78,13 +85,15 @@ cloud-my-save/
 2. **`dotenv`** : Charge les variables du fichier `.env` dans `process.env`.
 3. **`open`** : Ouvre automatiquement la page de connexion Google dans le navigateur par défaut (`open(authUrl)`).
 4. **`express`** : Framework Web pour créer des routes et endpoints API.
+5. **`archiver`** : Création d'archives compressées `.zip` en streaming ultra-performant.
 
 #### 🔵 Dépendances de Développement (`devDependencies`)
 1. **`typescript`** : Compilateur officiel TypeScript (`tsc`).
 2. **`tsx`** : Exécuteur TypeScript direct en mode développement (`npm run dev`).
-3. **`@types/node`** : Définitions de typage TypeScript pour l'environnement Node.js (`crypto`, `fs`, `http`, `path`).
+3. **`@types/node`** : Définitions de typage TypeScript pour l'environnement Node.js.
 4. **`@types/express`** : Définitions de typage pour Express.
 5. **`@types/open`** : Définitions de typage pour le paquet `open`.
+6. **`@types/archiver`** : Définitions de typage TypeScript pour `archiver`.
 
 ---
 
@@ -119,13 +128,9 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] OAuth avec goo
     7. Ferme le serveur HTTP local.
     8. **Déconnexion (`logout`)** : Révoque les jetons d'accès auprès des serveurs Google (`revokeCredentials()`), réinitialise les identifiants en mémoire et supprime localement le fichier chiffré `token.enc`.
 
-#### 4. `src/index.ts`
-* **Rôle :** Point d'entrée du backend.
-* **À quoi il sert :** Exécute l'authentification chiffrée (`authenticate()`), initialise le service Google Drive (`getDriveService()`), et effectue un test réel en lissant les fichiers Google Drive.
-
-#### 5. `token.enc` (Fichier chiffré à la racine du projet)
+#### 4. `token.enc` (Fichier chiffré à la racine du projet)
 * **Rôle :** Stockage chiffré local du jeton OAuth.
-* **Format :** Fichier JSON contenant l'IV (`iv`), le tag d'authentification (`authTag`) et la donnée chiffrée en hexadécimal (`encryptedData`). Les jetons Google n'apparaissent jamais en clair sur le disque.
+* **Format :** Fichier JSON contenant l'IV (`iv`), le tag d'authentification (`authTag`) et la donnée chiffrée en hexadécimal (`encryptedData`).
 
 ---
 
@@ -176,11 +181,64 @@ sequenceDiagram
 
 ---
 
-## 🗺️ 3. Roadmap & Prochaines Étapes de Développement
+## 📦 3. Fonctionnalité : Exportation de Sauvegarde (CLI & Google Drive)
+
+Cette partie correspond au point de la Roadmap Backend : **`- [x] Exporter une sauvegarde`**.
+
+### 📂 Fichiers dédiés à l'Exportation
+
+#### 1. `src/utils/zipUtils.ts`
+* **Rôle :** Compression et packaging des sauvegardes.
+* **À quoi il sert :**
+    * Génère un nom de fichier au format `<NomDuJeu>_jjJ_mmM_aaaaA_hhH_mmM_ssS.zip` (ex: `Sims4_28J_08M_2026A_20H_45M_39S.zip`) via `generateZipFilename()`.
+    * Génère la fiche de métadonnées `manifest.json` (`game`, `os`, `date`, `timestamp`, et `sources: [{ folder, path }]`) via `createManifest()`.
+    * Compresse un ou plusieurs dossiers/fichiers locaux dans une archive `.zip` optimisée (compression niveau 9) et y intègre `manifest.json` à la racine via `createZipArchive()`.
+
+#### 2. `src/services/driveService.ts`
+* **Rôle :** Interactions avancées avec l'arborescence Google Drive.
+* **À quoi il sert :**
+    * `getOrCreateFolder()` : Recherche un dossier sur Drive par son nom et parent. S'il n'existe pas, il est automatiquement créé.
+    * `uploadZipSave()` : Téléverse le fichier `.zip` avec ses métadonnées dans un dossier cible.
+    * `exportSaveToDrive()` : Coordonne la création de l'arborescence `cloud-my-save/<NomDuJeu>/` et l'envoi de l'archive.
+
+#### 3. `src/cli/exportCli.ts`
+* **Rôle :** Interface interactive en ligne de commande (CLI).
+* **À quoi il sert :**
+    * Demande à l'utilisateur le nom du jeu.
+    * Demande le premier chemin de sauvegarde et valide son existence sur le disque.
+    * Propose d'ajouter un 2ème, 3ème chemin, etc. jusqu'à validation.
+    * Lance la compression locale, déclenche l'upload sur Google Drive, supprime le zip temporaire et affiche un récapitulatif complet.
+
+#### 4. `src/index.ts`
+* **Rôle :** Point d'entrée de l'application. Lance directement l'assistant d'exportation CLI.
+
+---
+
+### 🔄 Schéma du Flux d'Exportation de Sauvegarde
+
+```mermaid
+flowchart TD
+    A[CLI Prompt: Nom du jeu] --> B[CLI Prompt: Chemin sauvegarde 1]
+    B --> C{Ajouter un autre chemin ?}
+    C -- Oui --> D[CLI Prompt: Chemin sauvegarde N]
+    D --> C
+    C -- Non / Terminé --> E[Validation des chemins locaux]
+    E --> F[Compression en archive .zip horodatée]
+    F --> G[Connexion Google Drive OAuth2]
+    G --> H[Recherche/Création dossier 'cloud-my-save']
+    H --> I[Recherche/Création dossier '<NomDuJeu>']
+    I --> J[Upload du fichier .zip]
+    J --> K[Suppression du fichier .zip temporaire local]
+    K --> L[Message de succès avec ID Drive & taille]
+```
+
+---
+
+## 🗺️ 4. Roadmap & Prochaines Étapes de Développement
 
 ### ⚙️ Backend
 - [x] **OAuth avec Google Drive (avec chiffrement local AES-256-GCM)**
-- [ ] **Exporter une sauvegarde** : Détection des dossiers locaux de jeux, compression `.zip`, envoi sur Google Drive.
+- [x] **Exporter une sauvegarde** : Interface interactive CLI, validation des chemins multiples, compression `.zip` et téléversement dans `cloud-my-save/<NomDuJeu>/`.
 - [ ] **Importer une sauvegarde** : Téléchargement depuis Google Drive, décompression et restauration locale.
 - [ ] **Gestion des versions (conflits)** : Horodatage et comparaison des versions.
 - [ ] **Plusieurs jeux en même temps** : Organisation par dossiers dédiés dans Google Drive.
@@ -192,7 +250,7 @@ sequenceDiagram
 
 ---
 
-## 🚀 4. Guide Pratique & Commandes Useful
+## 🚀 5. Guide Pratique & Commandes Useful
 
 ### ⚙️ Configuration initiale
 1. Copier le modèle d'environnement :
