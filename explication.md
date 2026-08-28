@@ -106,14 +106,17 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] OAuth avec goo
 * **À quoi il sert :** Centralise la configuration OAuth, définit le chemin du fichier chiffré (`token.enc`) au sein du projet, et récupère la clé `ENCRYPTION_SECRET`.
 
 #### 3. `src/auth/googleAuth.ts`
-* **Rôle :** Logique d'authentification OAuth 2.0 et persistance chiffrée.
+* **Rôle :** Logique d'authentification OAuth 2.0, persistance chiffrée et renouvellement automatique des jetons.
 * **À quoi il sert :**
-    1. Instancie le client `OAuth2Client`.
-    2. Si `token.enc` existe, déchiffre les jetons avec `decryptText()` et les applique à l'instance Google.
-    3. Si aucun jeton valide n'est présent, démarre un serveur HTTP local temporaire sur le port 3000.
-    4. Ouvre le navigateur sur la page d'autorisation Google via `open()`.
-    5. Récupère le code d'autorisation, l'échange contre des jetons d'accès (`access_token` et `refresh_token`), les **chiffre avec `encryptText()`** et enregistre le tout dans `token.enc`.
-    6. Ferme le serveur HTTP local.
+    1. Instancie le client `OAuth2Client` et attache un écouteur d'événement (`client.on('tokens', ...)`) pour enregistrer de manière chiffrée tout renouvellement de jeton d'accès en arrière-plan.
+    2. Si `token.enc` existe, déchiffre les jetons avec `decryptText()` et les applique au client.
+    3. Tente de valider/rafraîchir le jeton d'accès (`client.getAccessToken()`) :
+       * Si le jeton est encore valide ou renouvelable via le `refresh_token`, il est utilisé immédiatement (et persisté à jour).
+       * Si le jeton est expiré et irrécupérable (ex: jeton révoqué ou `invalid_grant`), l'erreur est interceptée et l'application bascule proprement sur l'authentification interactive.
+    4. Si aucun jeton n'existe ou si le jeton est invalide/révoqué, démarre un serveur HTTP local temporaire sur le port 3000.
+    5. Ouvre le navigateur sur la page d'autorisation Google via `open()`.
+    6. Récupère le code d'autorisation, l'échange contre des jetons d'accès (`access_token` et `refresh_token`), les **chiffre avec `encryptText()`** et enregistre le tout dans `token.enc`.
+    7. Ferme le serveur HTTP local.
 
 #### 4. `src/index.ts`
 * **Rôle :** Point d'entrée du backend.
@@ -125,7 +128,7 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] OAuth avec goo
 
 ---
 
-### 🔄 Schéma du Flux d'Authentification OAuth Chiffré
+### 🔄 Schéma du Flux d'Authentification & Renouvellement OAuth
 
 ```mermaid
 sequenceDiagram
@@ -133,19 +136,32 @@ sequenceDiagram
     participant App as App (src/index.ts)
     participant Auth as Auth (googleAuth.ts)
     participant Crypto as Crypto (cryptoUtils.ts)
+    participant GoogleAuth as Serveur OAuth Google
     participant Browser as Navigateur Web
     participant Drive as API Google Drive
 
     App->>Auth: Demande de connexion (authenticate)
+    Auth->>Auth: Attache écouteur client.on('tokens') pour auto-save
     alt Fichier token.enc existe
         Auth->>Crypto: Déchiffre token.enc avec AES-256-GCM (decryptText)
         Crypto-->>Auth: Retourne les jetons en clair
-        Auth-->>App: Charge les jetons déchiffrés
-    else Pas de token.enc
+        Auth->>Auth: Charge les jetons (setCredentials)
+        Auth->>GoogleAuth: Vérification / Rafraîchissement (getAccessToken)
+        alt Jeton valide ou renouvelé avec succès
+            GoogleAuth-->>Auth: Nouveau jeton (si rafraîchi)
+            Auth->>Crypto: Si rafraîchi, chiffre et sauvegarde (saveTokens)
+            Auth-->>App: Retourne le client authentifié
+        else Jeton révoqué / invalid_grant
+            GoogleAuth-->>Auth: Erreur invalid_grant
+            Auth->>Auth: Détection expiration -> Passage à l'authentification interactive
+        end
+    end
+    alt Pas de token.enc OU Jeton révoqué/invalide
         Auth->>Auth: Démarre serveur HTTP local temporaire (port 3000)
         Auth->>Browser: Ouvre la page d'autorisation Google (open)
         Browser->>Auth: Redirige avec le code d'autorisation OAuth (callback)
-        Auth->>Auth: Échange le code contre les jetons d'accès
+        Auth->>GoogleAuth: Échange le code contre les jetons (getToken)
+        GoogleAuth-->>Auth: Retourne access_token et refresh_token
         Auth->>Crypto: Chiffre les jetons en AES-256-GCM (encryptText)
         Crypto-->>Auth: Retourne le payload { iv, authTag, encryptedData }
         Auth->>Auth: Sauvegarde le payload dans token.enc

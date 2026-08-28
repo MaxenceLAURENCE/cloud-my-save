@@ -35,6 +35,11 @@ export function loadSavedTokens(client: OAuth2Client): boolean {
             const decryptedJson = decryptText(payload);
             const tokens: Credentials = JSON.parse(decryptedJson);
 
+            if (!tokens || typeof tokens !== 'object' || (!tokens.access_token && !tokens.refresh_token)) {
+                console.warn('⚠️ Le fichier de jetons est vide ou malformé. Réauthentification requise.');
+                return false;
+            }
+
             client.setCredentials(tokens);
             console.log('🔒 Jetons Google OAuth2 chargés et déchiffrés avec succès depuis token.enc.');
             return true;
@@ -60,14 +65,7 @@ export function saveTokens(tokens: Credentials): void {
 /**
  * Demande une autorisation utilisateur via le navigateur et écoute la redirection OAuth.
  */
-export async function authenticate(): Promise<OAuth2Client> {
-    const client = createOAuth2Client();
-
-    // Si des jetons chiffrés sont déjà enregistrés localement
-    if (loadSavedTokens(client)) {
-        return client;
-    }
-
+export async function requestUserAuthorization(client: OAuth2Client): Promise<OAuth2Client> {
     return new Promise((resolve, reject) => {
         const redirectUrlObj = new URL(GOOGLE_CONFIG.redirectUri);
         const port = parseInt(redirectUrlObj.port || '3000', 10);
@@ -137,6 +135,39 @@ export async function authenticate(): Promise<OAuth2Client> {
             await open(authUrl);
         });
     });
+}
+
+/**
+ * Authentifie le client OAuth2 : charge les jetons existants, vérifie/rafraîchit le token ou lance l'authentification navigateur.
+ */
+export async function authenticate(): Promise<OAuth2Client> {
+    const client = createOAuth2Client();
+
+    // Écouter les renouvellements automatiques de jetons par le client OAuth2 pour les persister
+    client.on('tokens', (tokens: Credentials) => {
+        const mergedTokens: Credentials = {
+            ...client.credentials,
+            ...tokens,
+        };
+        saveTokens(mergedTokens);
+    });
+
+    // Si des jetons chiffrés sont déjà enregistrés localement
+    if (loadSavedTokens(client)) {
+        try {
+            // getAccessToken() vérifie la validité du token d'accès actuel et utilise le refresh_token pour en obtenir un nouveau si expiré
+            const tokenResponse = await client.getAccessToken();
+            if (tokenResponse.token) {
+                console.log('✅ Jeton Google OAuth2 valide et prêt à l\'emploi.');
+                return client;
+            }
+        } catch (error) {
+            console.warn('⚠️ Le jeton d\'accès a expiré et le renouvellement a échoué (jeton révoqué ou expiré).');
+            console.warn('🔄 Lancement d\'une nouvelle authentification via le navigateur...');
+        }
+    }
+
+    return requestUserAuthorization(client);
 }
 
 /**
