@@ -1,6 +1,7 @@
 import fs from 'fs';
 import http from 'http';
 import { URL } from 'url';
+import crypto from 'crypto';
 import { google } from 'googleapis';
 import { OAuth2Client, Credentials } from 'google-auth-library';
 import open from 'open';
@@ -71,6 +72,11 @@ export async function requestUserAuthorization(client: OAuth2Client): Promise<OA
         const port = parseInt(redirectUrlObj.port || '3000', 10);
         const callbackPath = redirectUrlObj.pathname || '/oauth2callback';
 
+        // Génération d'un paramètre aléatoire 'state' pour la protection anti-CSRF (recommandé par Google / RFC 6749)
+        const state = crypto.randomBytes(32).toString('hex');
+
+        let timeoutId: NodeJS.Timeout | null = null;
+
         // Création d'un serveur HTTP temporaire pour intercepter le code d'autorisation
         const server = http.createServer(async (req, res) => {
             try {
@@ -81,12 +87,23 @@ export async function requestUserAuthorization(client: OAuth2Client): Promise<OA
                 if (reqUrl.pathname === callbackPath) {
                     const authCode = reqUrl.searchParams.get('code');
                     const authError = reqUrl.searchParams.get('error');
+                    const returnedState = reqUrl.searchParams.get('state');
+
+                    if (timeoutId) clearTimeout(timeoutId);
 
                     if (authError) {
                         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
                         res.end(`<h1>Erreur d'authentification</h1><p>${authError}</p>`);
                         server.close();
                         return reject(new Error(`Authentification annulée : ${authError}`));
+                    }
+
+                    // Validation du state anti-CSRF
+                    if (returnedState !== state) {
+                        res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+                        res.end(`<h1>Échec de sécurité</h1><p>Paramètre d'état (state) invalide ou tentative CSRF interceptée.</p>`);
+                        server.close();
+                        return reject(new Error('Échec de la validation de sécurité state (CSRF détecté).'));
                     }
 
                     if (authCode) {
@@ -113,6 +130,7 @@ export async function requestUserAuthorization(client: OAuth2Client): Promise<OA
                     }
                 }
             } catch (err) {
+                if (timeoutId) clearTimeout(timeoutId);
                 res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
                 res.end('<h1>Erreur serveur lors de l\'échange de jetons.</h1>');
                 server.close();
@@ -120,12 +138,26 @@ export async function requestUserAuthorization(client: OAuth2Client): Promise<OA
             }
         });
 
+        // Gestion des erreurs éventuelles du serveur HTTP (ex: port déjà occupé)
+        server.on('error', (err) => {
+            if (timeoutId) clearTimeout(timeoutId);
+            server.close();
+            reject(new Error(`Erreur du serveur d'authentification sur le port ${port}: ${err.message}`));
+        });
+
+        // Délai d'expiration (5 minutes) pour fermer le serveur temporaire si l'utilisateur abandonne
+        timeoutId = setTimeout(() => {
+            server.close();
+            reject(new Error('⏱️ Délai d\'authentification dépassé (5 minutes sans réponse de l\'utilisateur).'));
+        }, 5 * 60 * 1000);
+
         server.listen(port, async () => {
-            // Génération de l'URL d'autorisation Google
+            // Génération de l'URL d'autorisation Google avec access_type offline, prompt consent, scopes et state
             const authUrl = client.generateAuthUrl({
                 access_type: 'offline', // Permet d'obtenir un refresh_token
                 prompt: 'consent',     // Force l'affichage pour garantir la réception du refresh_token
                 scope: GOOGLE_CONFIG.scopes,
+                state,
             });
 
             console.log(`\n🔑 Ouverture du navigateur pour l'authentification Google Drive...`);
