@@ -117,6 +117,7 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] OAuth avec goo
     5. Ouvre le navigateur sur la page d'autorisation Google via `open()`.
     6. Récupère le code d'autorisation, l'échange contre des jetons d'accès (`access_token` et `refresh_token`), les **chiffre avec `encryptText()`** et enregistre le tout dans `token.enc`.
     7. Ferme le serveur HTTP local.
+    8. **Déconnexion (`logout`)** : Révoque les jetons d'accès auprès des serveurs Google (`revokeCredentials()`), réinitialise les identifiants en mémoire et supprime localement le fichier chiffré `token.enc`.
 
 #### 4. `src/index.ts`
 * **Rôle :** Point d'entrée du backend.

@@ -176,3 +176,50 @@ export async function authenticate(): Promise<OAuth2Client> {
 export function getDriveService(authClient: OAuth2Client) {
     return google.drive({ version: 'v3', auth: authClient });
 }
+
+/**
+ * Vérifie si un fichier de jetons local existe.
+ */
+export function hasSavedTokens(): boolean {
+    return fs.existsSync(GOOGLE_CONFIG.tokenPath);
+}
+
+/**
+ * Déconnecte l'utilisateur : révoque les jetons d'accès auprès des serveurs Google et supprime le fichier token.enc local.
+ * 
+ * @param authClient Optionnel : instance OAuth2Client connectée. Si non fournie, charge les jetons locaux existants pour les révoquer.
+ */
+export async function logout(authClient?: OAuth2Client): Promise<void> {
+    try {
+        const client = authClient || createOAuth2Client();
+
+        // Si le client n'a pas de credentials en mémoire, on tente de les charger depuis token.enc
+        if (!client.credentials?.access_token && !client.credentials?.refresh_token) {
+            loadSavedTokens(client);
+        }
+
+        // 1. Révocation des jetons auprès de Google
+        if (client.credentials?.access_token || client.credentials?.refresh_token) {
+            try {
+                await client.revokeCredentials();
+                console.log('🔓 Jetons Google révoqués avec succès côté serveur.');
+            } catch (revokeError) {
+                console.warn('⚠️ La révocation en ligne a échoué (jeton déjà révoqué, expiré ou absence de connexion).');
+            }
+            // Réinitialisation des credentials en mémoire
+            client.setCredentials({});
+        }
+
+        // 2. Suppression du fichier local chiffré
+        if (fs.existsSync(GOOGLE_CONFIG.tokenPath)) {
+            fs.unlinkSync(GOOGLE_CONFIG.tokenPath);
+            console.log(`🗑️ Fichier de jetons local supprimé : ${GOOGLE_CONFIG.tokenPath}`);
+        }
+
+        console.log('✅ Déconnexion terminée avec succès.');
+    } catch (error) {
+        console.error('❌ Erreur lors de la déconnexion :', error);
+        throw error;
+    }
+}
+
