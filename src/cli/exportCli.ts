@@ -4,7 +4,7 @@ import readline from 'readline/promises';
 import { drive_v3 } from 'googleapis';
 import { authenticate, getDriveService } from '../auth/googleAuth.js';
 import { exportSaveToDrive } from '../services/driveService.js';
-import { createZipArchive, generateZipFilename, ZipSource } from '../utils/zipUtils.js';
+import { createZipArchive, generateZipFilename, createManifest, ZipSource } from '../utils/zipUtils.js';
 
 /**
  * Formate une taille en octets en chaîne lisible (Ko, Mo, Go).
@@ -99,13 +99,16 @@ export async function runExportCli(existingDrive?: drive_v3.Drive): Promise<void
         });
         console.log('------------------------------------------------------\n');
 
-        // 3. Compression en archive .zip
+        // 3. Compression en archive .zip avec manifest.json
         const zipFilename = generateZipFilename(gameName);
         const tempZipDir = path.resolve(process.cwd(), '.tmp');
         const tempZipPath = path.resolve(tempZipDir, zipFilename);
 
-        console.log(`🗜️  Compression des fichiers en cours vers "${zipFilename}"...`);
-        const archiveSize = await createZipArchive(validSources, tempZipPath);
+        const manifest = createManifest(gameName, validSources);
+        console.log(`📄 Génération du manifest.json pour "${gameName}" (${manifest.os})...`);
+
+        console.log(`🗜️  Compression des fichiers et intégration du manifest dans "${zipFilename}"...`);
+        const archiveSize = await createZipArchive(validSources, tempZipPath, manifest);
         console.log(`✅ Archive créée avec succès ! Taille : ${formatBytes(archiveSize)}`);
 
         // 4. Authentification & Connexion Google Drive

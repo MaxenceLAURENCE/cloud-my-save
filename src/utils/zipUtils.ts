@@ -7,6 +7,38 @@ export interface ZipSource {
     name?: string;
 }
 
+export interface SaveManifestSource {
+    folder: string;
+    path: string;
+}
+
+export interface SaveManifest {
+    game: string;
+    os: string;
+    date: string;
+    timestamp: number;
+    sources: SaveManifestSource[];
+}
+
+/**
+ * Génère l'objet manifest.json pour une sauvegarde.
+ */
+export function createManifest(gameName: string, sources: ZipSource[]): SaveManifest {
+    const now = new Date();
+    const osType = process.platform === 'win32' ? 'windows' : (process.platform === 'linux' ? 'linux' : process.platform);
+
+    return {
+        game: gameName,
+        os: osType,
+        date: now.toISOString(),
+        timestamp: now.getTime(),
+        sources: sources.map((s) => ({
+            folder: s.name || path.basename(path.resolve(s.path)),
+            path: path.resolve(s.path),
+        })),
+    };
+}
+
 /**
  * Génère un nom de fichier zip formaté et horodaté pour la sauvegarde d'un jeu.
  */
@@ -32,12 +64,17 @@ export function generateZipFilename(gameName: string): string {
 }
 
 /**
- * Compresse un ou plusieurs dossiers/fichiers dans une archive .zip.
+ * Compresse un ou plusieurs dossiers/fichiers dans une archive .zip et y insère le manifest.json.
  * @param sources Liste des chemins sources à compresser.
  * @param outputZipPath Chemin complet du fichier .zip de destination.
+ * @param manifest Fiche manifest.json facultative à injecter à la racine de l'archive.
  * @returns Taille totale du fichier zip en octets.
  */
-export function createZipArchive(sources: ZipSource[], outputZipPath: string): Promise<number> {
+export function createZipArchive(
+    sources: ZipSource[],
+    outputZipPath: string,
+    manifest?: SaveManifest
+): Promise<number> {
     return new Promise((resolve, reject) => {
         // Assure que le dossier parent existe
         const outputDir = path.dirname(outputZipPath);
@@ -68,6 +105,13 @@ export function createZipArchive(sources: ZipSource[], outputZipPath: string): P
 
         archive.pipe(output);
 
+        // 1. Injection du manifest.json à la racine du zip
+        if (manifest) {
+            const manifestJson = JSON.stringify(manifest, null, 4);
+            archive.append(manifestJson, { name: 'manifest.json' });
+        }
+
+        // 2. Ajout des fichiers et dossiers sources
         for (const source of sources) {
             const absolutePath = path.resolve(source.path);
             const stats = fs.statSync(absolutePath);

@@ -191,7 +191,8 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] Exporter une s
 * **Rôle :** Compression et packaging des sauvegardes.
 * **À quoi il sert :**
     * Génère un nom de fichier au format `<NomDuJeu>_jjJ_mmM_aaaaA_hhH_mmM_ssS.zip` (ex: `Sims4_28J_08M_2026A_20H_45M_39S.zip`) via `generateZipFilename()`.
-    * Compresse un ou plusieurs dossiers/fichiers locaux dans une archive `.zip` optimisée (compression niveau 9) via `createZipArchive()`.
+    * Génère la fiche de métadonnées `manifest.json` (`game`, `os`, `date`, `timestamp`, et `sources: [{ folder, path }]`) via `createManifest()`.
+    * Compresse un ou plusieurs dossiers/fichiers locaux dans une archive `.zip` optimisée (compression niveau 9) et y intègre `manifest.json` à la racine via `createZipArchive()`.
 
 #### 2. `src/services/driveService.ts`
 * **Rôle :** Interactions avancées avec l'arborescence Google Drive.
