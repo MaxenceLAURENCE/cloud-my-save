@@ -1,39 +1,46 @@
+import readline from 'readline/promises';
 import { authenticate, getDriveService } from './auth/googleAuth.js';
 import { runExportCli } from './cli/exportCli.js';
+import { runImportCli } from './cli/importCli.js';
 
 async function main() {
-    console.log('🚀 Démarrage du module Backend Google Drive - cloud-my-save');
+    console.log('🚀 Démarrage de cloud-my-save\n');
 
     try {
         // 1. Authentification de l'utilisateur (charge token.enc ou ouvre le navigateur)
         const authClient = await authenticate();
-
-        // 2. Initialisation du service Google Drive
         const drive = getDriveService(authClient);
 
-        // 3. Test de connexion : Récupération des fichiers sur Google Drive
-        console.log('📂 Interrogation de Google Drive...');
-        const response = await drive.files.list({
-            pageSize: 5,
-            fields: 'files(id, name, mimeType)',
+        // 2. Menu principal interactif
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
         });
 
-        const files = response.data.files;
-        if (files && files.length > 0) {
-            console.log('\n📄 Fichiers récents trouvés sur Google Drive :');
-            files.forEach((file) => {
-                console.log(`- ${file.name} (ID: ${file.id})`);
-            });
+        console.log('\n======================================================');
+        console.log('🎮  MENU PRINCIPAL - cloud-my-save');
+        console.log('======================================================');
+        console.log('  1. 📦 Exporter une sauvegarde (Local ➔ Google Drive)');
+        console.log('  2. 📥 Importer une sauvegarde (Google Drive ➔ Local)');
+        console.log('  3. 🚪 Quitter');
+        console.log('======================================================\n');
+
+        const actionChoice = await rl.question('👉 Votre choix (1/2/3) : ');
+        rl.close();
+
+        const trimmed = actionChoice.trim();
+        if (trimmed === '1' || trimmed.toLowerCase() === 'export' || trimmed.toLowerCase() === 'exporter') {
+            await runExportCli(drive);
+        } else if (trimmed === '2' || trimmed.toLowerCase() === 'import' || trimmed.toLowerCase() === 'importer') {
+            await runImportCli(drive);
+        } else if (trimmed === '3' || trimmed.toLowerCase() === 'quitter') {
+            console.log('👋 Au revoir !');
         } else {
-            console.log('📄 Aucun fichier trouvé dans le périmètre d\'accès.');
+            console.log('ℹ️ Choix non reconnu. Lancement de l\'exportation par défaut...');
+            await runExportCli(drive);
         }
-
-        console.log('\n✅ Authentification Google Drive opérationnelle !');
-
-        // 4. Lancement de l'assistant d'exportation CLI avec l'instance drive authentifiée
-        await runExportCli(drive);
     } catch (error) {
-        console.error('❌ Erreur lors de l\'authentification ou de l\'initialisation Google Drive :', error);
+        console.error('❌ Erreur lors de l\'exécution de cloud-my-save :', error);
     }
 }
 
