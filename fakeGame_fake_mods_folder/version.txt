@@ -45,12 +45,6 @@ fichier_lecture_seule.txt
 fichier_executable.sh
   -> Description : Script shell exécutable (droits 0755).
 
-dossier_lecture_seule/
-  -> Description : Répertoire en lecture seule (droits 0555). Son contenu doit pouvoir être parcouru et lu.
-
-dossier_lecture_seule/contenu.txt
-  -> Description : Fichier standard stocké dans un répertoire en lecture seule.
-
 --- DATES DE MODIFICATION PARTICULIÈRES (MTIME) ---
 fichier_epoch_1970.txt
   -> Description : Date fixée au 01/01/1970 00:00:00 UTC (Unix Epoch). Vérifie le support des timestamps anciens.

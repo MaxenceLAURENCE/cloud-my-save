@@ -27,7 +27,8 @@ cloud-my-save/
 │   ├── auth/
 │   │   └── googleAuth.ts
 │   ├── cli/
-│   │   └── exportCli.ts
+│   │   ├── exportCli.ts
+│   │   └── importCli.ts
 │   ├── config/
 │   │   └── googleConfig.ts
 │   ├── services/
@@ -70,7 +71,7 @@ cloud-my-save/
     * `dist/` (code compilé généré automatiquement)
     * `.env` (données confidentielles)
     * `token.enc` & `token.json` (jetons d'accès utilisateur Google chiffrés ou bruts)
-    * `.tmp/` (fichiers zip temporaires créés lors de la compression avant upload)
+    * `.tmp/` (fichiers temporaires créés lors de la compression ou de l'extraction)
     * `*.zip` (archives de sauvegarde)
 
 #### 8. `.prettierrc` (Conventions de formatage)
@@ -86,6 +87,11 @@ cloud-my-save/
 3. **`open`** : Ouvre automatiquement la page de connexion Google dans le navigateur par défaut (`open(authUrl)`).
 4. **`express`** : Framework Web pour créer des routes et endpoints API.
 5. **`archiver`** : Création d'archives compressées `.zip` en streaming ultra-performant.
+6. **`adm-zip`** : Décompression et extraction synchrone/asynchrone des archives `.zip` téléchargées.
+
+> 💡 **Pourquoi utiliser deux modules de compression distincts ?**
+> * **`archiver` (Écriture seule en streaming) :** Ne sait pas décompresser, mais compresse en flux continu (*streaming*). La consommation de mémoire RAM reste minuscule (~30 Mo) même pour des sauvegardes très lourdes (mondes Minecraft de plusieurs Go), éliminant tout risque de crash `Out of Memory`.
+> * **`adm-zip` (Extraction rapide) :** Utilisé pour décompresser et inspecter les archives téléchargées facilement sur le disque.
 
 #### 🔵 Dépendances de Développement (`devDependencies`)
 1. **`typescript`** : Compilateur officiel TypeScript (`tsc`).
@@ -94,6 +100,7 @@ cloud-my-save/
 4. **`@types/express`** : Définitions de typage pour Express.
 5. **`@types/open`** : Définitions de typage pour le paquet `open`.
 6. **`@types/archiver`** : Définitions de typage TypeScript pour `archiver`.
+7. **`@types/adm-zip`** : Définitions de typage TypeScript pour `adm-zip`.
 
 ---
 
@@ -115,18 +122,14 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] OAuth avec goo
 * **À quoi il sert :** Centralise la configuration OAuth, définit le chemin du fichier chiffré (`token.enc`) au sein du projet, et récupère la clé `ENCRYPTION_SECRET`.
 
 #### 3. `src/auth/googleAuth.ts`
-* **Rôle :** Logique d'authentification OAuth 2.0, persistance chiffrée et renouvellement automatique des jetons.
+* **Rôle :** Logique d'authentification OAuth 2.0, persistance chiffrée, renouvellement automatique de token et déconnexion.
 * **À quoi il sert :**
-    1. Instancie le client `OAuth2Client` et attache un écouteur d'événement (`client.on('tokens', ...)`) pour enregistrer de manière chiffrée tout renouvellement de jeton d'accès en arrière-plan.
-    2. Si `token.enc` existe, déchiffre les jetons avec `decryptText()` et les applique au client.
-    3. Tente de valider/rafraîchir le jeton d'accès (`client.getAccessToken()`) :
-       * Si le jeton est encore valide ou renouvelable via le `refresh_token`, il est utilisé immédiatement (et persisté à jour).
-       * Si le jeton est expiré et irrécupérable (ex: jeton révoqué ou `invalid_grant`), l'erreur est interceptée et l'application bascule proprement sur l'authentification interactive.
-    4. Si aucun jeton n'existe ou si le jeton est invalide/révoqué, démarre un serveur HTTP local temporaire sur le port 3000.
-    5. Ouvre le navigateur sur la page d'autorisation Google via `open()`.
-    6. Récupère le code d'autorisation, l'échange contre des jetons d'accès (`access_token` et `refresh_token`), les **chiffre avec `encryptText()`** et enregistre le tout dans `token.enc`.
-    7. Ferme le serveur HTTP local.
-    8. **Déconnexion (`logout`)** : Révoque les jetons d'accès auprès des serveurs Google (`revokeCredentials()`), réinitialise les identifiants en mémoire et supprime localement le fichier chiffré `token.enc`.
+    1. Instancie le client `OAuth2Client`.
+    2. Si `token.enc` existe, déchiffre les jetons avec `decryptText()`, teste la validité avec `getAccessToken()` et rafraîchit si expiré.
+    3. Si aucun jeton valide n'est présent, démarre un serveur HTTP local temporaire sur le port 3000 avec protection anti-CSRF (`state`).
+    4. Ouvre le navigateur sur la page d'autorisation Google via `open()`.
+    5. Récupère le code d'autorisation, l'échange contre des jetons d'accès (`access_token` et `refresh_token`), les **chiffre avec `encryptText()`** et enregistre le tout dans `token.enc`.
+    6. Fonction `logout()` pour révoquer les accès et purger le fichier local.
 
 #### 4. `token.enc` (Fichier chiffré à la racine du projet)
 * **Rôle :** Stockage chiffré local du jeton OAuth.
@@ -134,7 +137,7 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] OAuth avec goo
 
 ---
 
-### 🔄 Schéma du Flux d'Authentification & Renouvellement OAuth
+### 🔄 Schéma du Flux d'Authentification OAuth Chiffré
 
 ```mermaid
 sequenceDiagram
@@ -142,32 +145,19 @@ sequenceDiagram
     participant App as App (src/index.ts)
     participant Auth as Auth (googleAuth.ts)
     participant Crypto as Crypto (cryptoUtils.ts)
-    participant GoogleAuth as Serveur OAuth Google
     participant Browser as Navigateur Web
     participant Drive as API Google Drive
 
     App->>Auth: Demande de connexion (authenticate)
-    Auth->>Auth: Attache écouteur client.on('tokens') pour auto-save
     alt Fichier token.enc existe
         Auth->>Crypto: Déchiffre token.enc avec AES-256-GCM (decryptText)
         Crypto-->>Auth: Retourne les jetons en clair
-        Auth->>Auth: Charge les jetons (setCredentials)
-        Auth->>GoogleAuth: Vérification / Rafraîchissement (getAccessToken)
-        alt Jeton valide ou renouvelé avec succès
-            GoogleAuth-->>Auth: Nouveau jeton (si rafraîchi)
-            Auth->>Crypto: Si rafraîchi, chiffre et sauvegarde (saveTokens)
-            Auth-->>App: Retourne le client authentifié
-        else Jeton révoqué / invalid_grant
-            GoogleAuth-->>Auth: Erreur invalid_grant
-            Auth->>Auth: Détection expiration -> Passage à l'authentification interactive
-        end
-    end
-    alt Pas de token.enc OU Jeton révoqué/invalide
+        Auth-->>App: Charge les jetons déchiffrés
+    else Pas de token.enc
         Auth->>Auth: Démarre serveur HTTP local temporaire (port 3000)
         Auth->>Browser: Ouvre la page d'autorisation Google (open)
         Browser->>Auth: Redirige avec le code d'autorisation OAuth (callback)
-        Auth->>GoogleAuth: Échange le code contre les jetons (getToken)
-        GoogleAuth-->>Auth: Retourne access_token et refresh_token
+        Auth->>Auth: Échange le code contre les jetons d'accès
         Auth->>Crypto: Chiffre les jetons en AES-256-GCM (encryptText)
         Crypto-->>Auth: Retourne le payload { iv, authTag, encryptedData }
         Auth->>Auth: Sauvegarde le payload dans token.enc
@@ -188,29 +178,25 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] Exporter une s
 ### 📂 Fichiers dédiés à l'Exportation
 
 #### 1. `src/utils/zipUtils.ts`
-* **Rôle :** Compression et packaging des sauvegardes.
+* **Rôle :** Compression, packaging et métadonnées.
 * **À quoi il sert :**
-    * Génère un nom de fichier au format `<NomDuJeu>_jjJ_mmM_aaaaA_hhH_mmM_ssS.zip` (ex: `Sims4_28J_08M_2026A_20H_45M_39S.zip`) via `generateZipFilename()`.
-    * Génère la fiche de métadonnées `manifest.json` (`game`, `os`, `date`, `timestamp`, et `sources: [{ folder, path }]`) via `createManifest()`.
-    * Compresse un ou plusieurs dossiers/fichiers locaux dans une archive `.zip` optimisée (compression niveau 9) et y intègre `manifest.json` à la racine via `createZipArchive()`.
+    * `generateZipFilename()` : Génère un nom de fichier au format `<NomDuJeu>_jjJ_mmM_aaaaA_hhH_mmM_ssS.zip` (ex: `test_29J_08M_2026A_01H_36M_57S.zip`).
+    * `createManifest()` : Génère la fiche `manifest.json` (`game`, `os`, `date`, `timestamp`, et `sources: [{ folder, path }]`).
+    * `createZipArchive()` : Compresse les dossiers/fichiers locaux dans une archive `.zip` optimisée (compression niveau 9) et y insère `manifest.json` à la racine.
 
 #### 2. `src/services/driveService.ts`
-* **Rôle :** Interactions avancées avec l'arborescence Google Drive.
+* **Rôle :** Interactions avec Google Drive pour le stockage.
 * **À quoi il sert :**
     * `getOrCreateFolder()` : Recherche un dossier sur Drive par son nom et parent. S'il n'existe pas, il est automatiquement créé.
-    * `uploadZipSave()` : Téléverse le fichier `.zip` avec ses métadonnées dans un dossier cible.
-    * `exportSaveToDrive()` : Coordonne la création de l'arborescence `cloud-my-save/<NomDuJeu>/` et l'envoi de l'archive.
+    * `uploadZipSave()` : Téléverse le fichier `.zip` avec ses métadonnées dans `cloud-my-save/<NomDuJeu>/`.
+    * `exportSaveToDrive()` : Coordonne la création de l'arborescence et l'envoi de l'archive.
 
 #### 3. `src/cli/exportCli.ts`
-* **Rôle :** Interface interactive en ligne de commande (CLI).
+* **Rôle :** Interface interactive CLI pour l'exportation.
 * **À quoi il sert :**
-    * Demande à l'utilisateur le nom du jeu.
-    * Demande le premier chemin de sauvegarde et valide son existence sur le disque.
-    * Propose d'ajouter un 2ème, 3ème chemin, etc. jusqu'à validation.
-    * Lance la compression locale, déclenche l'upload sur Google Drive, supprime le zip temporaire et affiche un récapitulatif complet.
-
-#### 4. `src/index.ts`
-* **Rôle :** Point d'entrée de l'application. Lance directement l'assistant d'exportation CLI.
+    * Collecte le nom du jeu et la liste des chemins de sauvegarde locaux.
+    * Valide l'existence et les droits d'accès en lecture (`R_OK`).
+    * Lance la compression locale avec `manifest.json`, déclenche l'upload sur Google Drive et supprime le fichier zip temporaire.
 
 ---
 
@@ -218,29 +204,85 @@ Cette partie correspond au point de la Roadmap Backend : **`- [x] Exporter une s
 
 ```mermaid
 flowchart TD
-    A[CLI Prompt: Nom du jeu] --> B[CLI Prompt: Chemin sauvegarde 1]
+    A[CLI: Nom du jeu] --> B[CLI: Chemin sauvegarde 1]
     B --> C{Ajouter un autre chemin ?}
-    C -- Oui --> D[CLI Prompt: Chemin sauvegarde N]
+    C -- Oui --> D[CLI: Chemin sauvegarde N]
     D --> C
     C -- Non / Terminé --> E[Validation des chemins locaux]
-    E --> F[Compression en archive .zip horodatée]
-    F --> G[Connexion Google Drive OAuth2]
-    G --> H[Recherche/Création dossier 'cloud-my-save']
-    H --> I[Recherche/Création dossier '<NomDuJeu>']
-    I --> J[Upload du fichier .zip]
-    J --> K[Suppression du fichier .zip temporaire local]
-    K --> L[Message de succès avec ID Drive & taille]
+    E --> F[Génération du manifest.json]
+    F --> G[Compression zip avec manifest à la racine]
+    G --> H[Connexion Google Drive OAuth2]
+    H --> I[Recherche/Création dossier 'cloud-my-save']
+    I --> J[Recherche/Création dossier '<NomDuJeu>']
+    J --> K[Upload du fichier .zip]
+    K --> L[Suppression du zip temporaire local]
+    L --> M[Message de succès avec ID Drive]
 ```
 
 ---
 
-## 🗺️ 4. Roadmap & Prochaines Étapes de Développement
+## 📥 4. Fonctionnalité : Importation de Sauvegarde (Google Drive ➔ Local)
+
+Cette partie correspond au point de la Roadmap Backend : **`- [x] Importer une sauvegarde`**.
+
+### 📂 Fichiers dédiés à l'Importation
+
+#### 1. `src/services/driveService.ts`
+* **Nouvelles fonctions d'import :**
+    * `listGamesOnDrive()` : Scanne le dossier `cloud-my-save` sur Google Drive et retourne la liste des jeux disponibles.
+    * `listGameSavesOnDrive()` : Liste les sauvegardes `.zip` d'un jeu spécifique, ordonnées de la plus récente à la plus ancienne.
+    * `downloadFileFromDrive()` : Télécharge en streaming le fichier `.zip` sélectionné vers un dossier temporaire local (`.tmp/`).
+
+#### 2. `src/utils/zipUtils.ts`
+* **Nouvelles fonctions d'extraction et d'importation :**
+    * `extractZipArchive()` : Décompresse l'archive `.zip` dans un répertoire temporaire à l'aide de `adm-zip`.
+    * `readManifestFromDir()` : Lit et valide le fichier `manifest.json` présent à la racine de l'archive décompressée.
+    * `importSourcesFromDir()` : Parcourt chaque élément de `manifest.sources` et importe le dossier/fichier à son emplacement cible sur le disque (création automatique des dossiers parents et copie récursive avec préservation des timestamps).
+
+#### 3. `src/cli/importCli.ts`
+* **Rôle :** Interface interactive CLI pour l'importation.
+* **À quoi il sert :**
+    1. Affiche la liste des jeux disponibles sur Google Drive (ou invite à en saisir un).
+    2. Affiche les sauvegardes disponibles avec leur taille et date.
+    3. Permet à l'utilisateur de choisir la sauvegarde à importer.
+    4. Télécharge le fichier `.zip`, le décompresse, et lit le `manifest.json`.
+    5. Affiche le récapitulatif précis des dossiers cibles et demande confirmation.
+    6. Exécute l'importation vers les chemins exacts et nettoie les fichiers temporaires.
+
+#### 4. `src/index.ts`
+* **Rôle :** Menu principal interactif permettant à l'utilisateur de choisir à tout moment entre l'exportation, l'importation ou quitter.
+
+---
+
+### 🔄 Schéma du Flux d'Importation de Sauvegarde
+
+```mermaid
+flowchart TD
+    A[Menu Principal: Choix Importer] --> B[Connexion Google Drive]
+    B --> C[Listing des jeux dans 'cloud-my-save']
+    C --> D[Choix du jeu par l'utilisateur]
+    D --> E[Listing des sauvegardes .zip du jeu]
+    E --> F[Sélection de la sauvegarde à importer]
+    F --> G[Téléchargement du .zip dans .tmp/]
+    G --> H[Décompression de l'archive]
+    H --> I[Lecture et validation du manifest.json]
+    I --> J[Affichage des correspondances Dossier -> Destination]
+    J --> K{Confirmation utilisateur ?}
+    K -- Non --> L[Annulation et nettoyage .tmp/]
+    K -- Oui --> M[Importation récursive vers les chemins locaux cibles]
+    M --> N[Nettoyage des fichiers temporaires .tmp/]
+    N --> O[Message de succès final]
+```
+
+---
+
+## 🗺️ 5. Roadmap & Prochaines Étapes de Développement
 
 ### ⚙️ Backend
 - [x] **OAuth avec Google Drive (avec chiffrement local AES-256-GCM)**
-- [x] **Exporter une sauvegarde** : Interface interactive CLI, validation des chemins multiples, compression `.zip` et téléversement dans `cloud-my-save/<NomDuJeu>/`.
-- [ ] **Importer une sauvegarde** : Téléchargement depuis Google Drive, décompression et restauration locale.
-- [ ] **Gestion des versions (conflits)** : Horodatage et comparaison des versions.
+- [x] **Exporter une sauvegarde** : Interface interactive CLI, validation des chemins multiples, génération du `manifest.json`, compression `.zip` et téléversement dans `cloud-my-save/<NomDuJeu>/`.
+- [x] **Importer une sauvegarde** : Listing des sauvegardes sur Drive, téléchargement, décompression, lecture du `manifest.json` et importation automatique à leurs emplacements d'origine.
+- [ ] **Gestion des versions (conflits)** : Horodatage et comparaison des versions avant écrasement.
 - [ ] **Plusieurs jeux en même temps** : Organisation par dossiers dédiés dans Google Drive.
 
 ### 🎨 Frontend
@@ -250,21 +292,11 @@ flowchart TD
 
 ---
 
-## 🚀 5. Guide Pratique & Commandes Useful
-
-### ⚙️ Configuration initiale
-1. Copier le modèle d'environnement :
-    ```bash
-    cp .env.example .env
-    ```
-2. Configurer vos clés dans `.env` :
-    * `GOOGLE_CLIENT_ID`
-    * `GOOGLE_CLIENT_SECRET`
-    * `ENCRYPTION_SECRET` (clé de chiffrement de votre choix)
+## 🚀 6. Guide Pratique & Commandes Useful
 
 ### 📜 Commandes npm
 | Commande | Action |
 | :--- | :--- |
-| `npm run dev` | Lance l'application en mode dev direct avec `tsx`. |
-| `npm run build` | Compile le code TypeScript (`src/`) vers `dist/`. |
+| `npm run dev` | Lance le menu principal de l'application en mode interactif (Export ou Import). |
+| `npm run build` | Compile l'ensemble du code TypeScript (`src/`) vers `dist/`. |
 | `npm start` | Exécute la version compilée depuis `dist/index.js`. |

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ZipArchive } from 'archiver';
+import AdmZip from 'adm-zip';
 
 export interface ZipSource {
     path: string;
@@ -18,6 +19,13 @@ export interface SaveManifest {
     date: string;
     timestamp: number;
     sources: SaveManifestSource[];
+}
+
+export interface ImportResult {
+    folder: string;
+    targetPath: string;
+    status: 'imported' | 'error';
+    error?: string;
 }
 
 /**
@@ -126,4 +134,97 @@ export function createZipArchive(
 
         archive.finalize();
     });
+}
+
+/**
+ * Décompresse une archive .zip vers un dossier de destination.
+ * @param zipFilePath Chemin du fichier .zip
+ * @param targetExtractDir Dossier où extraire les fichiers
+ */
+export async function extractZipArchive(zipFilePath: string, targetExtractDir: string): Promise<void> {
+    if (!fs.existsSync(targetExtractDir)) {
+        fs.mkdirSync(targetExtractDir, { recursive: true });
+    }
+
+    const zip = new AdmZip(zipFilePath);
+    zip.extractAllTo(targetExtractDir, true);
+}
+
+/**
+ * Lit et analyse le fichier manifest.json depuis un dossier extrait.
+ * @param extractedDir Dossier contenant les fichiers extraits
+ * @returns L'objet SaveManifest
+ */
+export function readManifestFromDir(extractedDir: string): SaveManifest {
+    const manifestPath = path.join(extractedDir, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+        throw new Error('Le fichier "manifest.json" est introuvable à la racine de l\'archive de sauvegarde.');
+    }
+
+    const rawContent = fs.readFileSync(manifestPath, 'utf8');
+    const manifest: SaveManifest = JSON.parse(rawContent);
+
+    if (!manifest.game || !manifest.sources || !Array.isArray(manifest.sources)) {
+        throw new Error('Le fichier "manifest.json" est invalide ou corrompu (champs "game" ou "sources" manquants).');
+    }
+
+    return manifest;
+}
+
+/**
+ * Importe les dossiers et fichiers extraits vers leurs emplacements cibles décrits dans le manifest.
+ * @param extractedDir Dossier source contenant les éléments extraits
+ * @param manifest Fiche manifest décrivant les correspondances { folder, path }
+ * @returns Résumé de chaque importation
+ */
+export function importSourcesFromDir(extractedDir: string, manifest: SaveManifest): ImportResult[] {
+    const results: ImportResult[] = [];
+
+    for (const source of manifest.sources) {
+        const sourceFolderInZip = path.join(extractedDir, source.folder);
+        const targetPath = path.resolve(source.path);
+
+        try {
+            if (!fs.existsSync(sourceFolderInZip)) {
+                throw new Error(`Le dossier/fichier "${source.folder}" n'a pas été trouvé dans l'archive décompressée.`);
+            }
+
+            const stats = fs.statSync(sourceFolderInZip);
+
+            // S'assurer que le dossier parent cible existe
+            const targetParentDir = path.dirname(targetPath);
+            if (!fs.existsSync(targetParentDir)) {
+                fs.mkdirSync(targetParentDir, { recursive: true });
+            }
+
+            if (stats.isDirectory()) {
+                if (!fs.existsSync(targetPath)) {
+                    fs.mkdirSync(targetPath, { recursive: true });
+                }
+                // Copie récursive de tout le contenu du dossier
+                fs.cpSync(sourceFolderInZip, targetPath, {
+                    recursive: true,
+                    force: true,
+                    preserveTimestamps: true,
+                });
+            } else {
+                fs.copyFileSync(sourceFolderInZip, targetPath);
+            }
+
+            results.push({
+                folder: source.folder,
+                targetPath,
+                status: 'imported',
+            });
+        } catch (err: any) {
+            results.push({
+                folder: source.folder,
+                targetPath,
+                status: 'error',
+                error: err.message,
+            });
+        }
+    }
+
+    return results;
 }
