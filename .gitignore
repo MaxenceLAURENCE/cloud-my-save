@@ -5,3 +5,5 @@ token.json
 token.enc
 .tmp/
 *.zip
+games_registry.json
+data/
