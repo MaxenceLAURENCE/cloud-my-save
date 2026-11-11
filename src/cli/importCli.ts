@@ -9,6 +9,8 @@ import {
     downloadFileFromDrive,
     DriveSaveFile,
 } from '../services/driveService.js';
+import { saveLocalManifest } from '../services/localRegistryService.js';
+import { compareGameVersions } from '../services/versionService.js';
 import { extractZipArchive, readManifestFromDir, importSourcesFromDir } from '../utils/zipUtils.js';
 
 /**
@@ -38,7 +40,7 @@ function formatDate(dateStr?: string): string {
 }
 
 /**
- * Lance l'interface interactive en ligne de commande pour importer / restaurer une sauvegarde.
+ * Lance l'interface interactive en ligne de commande pour importer une sauvegarde avec détection de conflits.
  */
 export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void> {
     const rl = readline.createInterface({
@@ -129,6 +131,46 @@ export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void
             }
         }
 
+        // 5. Comparaison des versions & Détection de Conflit (Local vs Online)
+        console.log(`\n⚖️  Vérification de l'état des versions (Local vs Cloud)...`);
+        const comparison = await compareGameVersions(drive, selectedGame, selectedSave);
+
+        console.log(`\n------------------------------------------------------`);
+        console.log(`📊 État de la comparaison pour "${selectedGame}" :`);
+        console.log(`   - Version Cloud sélectionnée : ${comparison.onlineDateFormatted || 'Inconnue'}`);
+        console.log(`   - Version Locale détectée    : ${comparison.localDateFormatted || 'Aucune sauvegarde locale'}`);
+        console.log(`   - Diagnostic                : ${comparison.message}`);
+        console.log(`------------------------------------------------------`);
+
+        // Gestion selon le statut du conflit
+        if (comparison.status === 'LOCAL_NEWER') {
+            console.log('\n🚨 ======================================================');
+            console.log('⚠️  ALERTE DE CONFLIT : VOTRE SAUVEGARDE LOCALE EST PLUS RÉCENTE !');
+            console.log('======================================================');
+            console.log(`La sauvegarde locale sur votre PC a été modifiée plus récemment (+ ${comparison.timeDifferenceFormatted})`);
+            console.log('que la version Google Drive que vous tentez d\'importer.');
+            console.log('⚠️  L\'importation ÉCRASERA définitivement vos progrès locaux plus récents !');
+            console.log('======================================================\n');
+
+            const forceChoice = await rl.question('👉 Voulez-vous TOUT DE MÊME forcer l\'importation et écraser le local ? (tapez "OUI" en majuscules pour confirmer) : ');
+            if (forceChoice.trim() !== 'OUI') {
+                console.log('\n🛑 Importation annulée par sécurité. Vos fichiers locaux récents ont été préservés.');
+                console.log('💡 Conseil : Si vous souhaitez synchroniser vos progrès locaux vers le Cloud, utilisez l\'option "Exporter".\n');
+                return;
+            }
+            console.log('\n⚠️ Forçage de l\'importation confirmé par l\'utilisateur.');
+        } else if (comparison.status === 'IN_SYNC') {
+            console.log('\nℹ️ Vos fichiers locaux et la sauvegarde Cloud sont déjà au même niveau.');
+            const syncChoice = await rl.question('👉 Souhaitez-vous tout de même réimporter ? (o/N) : ');
+            if (syncChoice.trim().toLowerCase() !== 'o' && syncChoice.trim().toLowerCase() !== 'oui') {
+                console.log('\n🛑 Importation annulée (sauvegarde déjà à jour).');
+                return;
+            }
+        } else if (comparison.status === 'ONLINE_NEWER') {
+            console.log(`\n☁️  La version Cloud est plus récente (+ ${comparison.timeDifferenceFormatted}).`);
+        }
+
+        // 6. Téléchargement de l'archive
         console.log(`\n⬇️  Téléchargement de "${selectedSave.name}" depuis Google Drive...`);
         const downloadZipPath = path.join(tempDir, selectedSave.name);
         const extractPath = path.join(tempDir, 'extracted');
@@ -136,12 +178,12 @@ export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void
         await downloadFileFromDrive(drive, selectedSave.id, downloadZipPath);
         console.log('✅ Téléchargement terminé.');
 
-        // 5. Décompression de l'archive
+        // 7. Décompression de l'archive
         console.log('🗜️  Décompression de l\'archive...');
         await extractZipArchive(downloadZipPath, extractPath);
         console.log('✅ Archive décompressée.');
 
-        // 6. Lecture et analyse du manifest.json
+        // 8. Lecture et analyse du manifest.json
         console.log('📄 Analyse du manifest.json...');
         const manifest = readManifestFromDir(extractPath);
 
@@ -156,8 +198,8 @@ export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void
         });
         console.log('------------------------------------------------------\n');
 
-        // 7. Confirmation utilisateur
-        const confirm = await rl.question('⚠️  Confirmer l\'importation vers ces emplacements ? (O/n) : ');
+        // 9. Confirmation utilisateur
+        const confirm = await rl.question('⚠️  Confirmer l\'importation et le remplacement vers ces emplacements ? (O/n) : ');
         const trimmedConfirm = confirm.trim().toLowerCase();
 
         if (trimmedConfirm === 'n' || trimmedConfirm === 'non') {
@@ -165,8 +207,8 @@ export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void
             return;
         }
 
-        // 8. Importation des dossiers / fichiers vers leurs emplacements cibles
-        console.log('\n🚀 Importation des fichiers en cours...');
+        // 10. Importation des dossiers / fichiers vers leurs emplacements cibles
+        console.log('\n🚀 Importation et remplacement des fichiers locaux en cours...');
         const results = importSourcesFromDir(extractPath, manifest);
 
         let errorCount = 0;
@@ -180,8 +222,13 @@ export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void
         });
 
         if (errorCount === 0) {
+            // 11. Enregistrement du manifest dans le registre local
+            saveLocalManifest(manifest);
+
             console.log('\n======================================================');
             console.log('🎉 TOUTES LES SAUVEGARDES ONT ÉTÉ IMPORTÉES AVEC SUCCÈS !');
+            console.log('======================================================');
+            console.log(`💾 Registre local mis à jour pour "${manifest.game}".`);
             console.log('======================================================\n');
         } else {
             console.log('\n⚠️  Importation terminée avec des erreurs. Veuillez vérifier les chemins ci-dessus.\n');
@@ -189,7 +236,7 @@ export async function runImportCli(existingDrive?: drive_v3.Drive): Promise<void
     } catch (error) {
         console.error('\n❌ Erreur durant l\'importation de la sauvegarde :', error);
     } finally {
-        // 9. Nettoyage des fichiers temporaires
+        // 12. Nettoyage des fichiers temporaires
         try {
             if (fs.existsSync(tempDir)) {
                 fs.rmSync(tempDir, { recursive: true, force: true });

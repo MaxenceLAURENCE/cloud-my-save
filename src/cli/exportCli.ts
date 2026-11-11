@@ -4,6 +4,7 @@ import readline from 'readline/promises';
 import { drive_v3 } from 'googleapis';
 import { authenticate, getDriveService } from '../auth/googleAuth.js';
 import { exportSaveToDrive } from '../services/driveService.js';
+import { getRegisteredLocalManifest, saveLocalManifest } from '../services/localRegistryService.js';
 import { createZipArchive, generateZipFilename, createManifest, ZipSource } from '../utils/zipUtils.js';
 
 /**
@@ -41,54 +42,95 @@ export async function runExportCli(existingDrive?: drive_v3.Drive): Promise<void
         }
         gameName = gameName.trim();
 
-        // 2. Collecte des chemins locaux
-        const validSources: ZipSource[] = [];
-        let pathIndex = 1;
+        // 2. Collecte des chemins locaux (avec réutilisation intelligente si déjà configuré)
+        let validSources: ZipSource[] = [];
 
-        console.log(`\n📂 Configuration des dossiers / fichiers de sauvegarde pour "${gameName}" :`);
-
-        while (true) {
-            const promptText = pathIndex === 1
-                ? `👉 Chemin de la sauvegarde n°${pathIndex} : `
-                : `👉 Chemin n°${pathIndex} (laisser vide ou taper 'fin' pour terminer) : `;
-
-            const rawPath = await rl.question(promptText);
-            const trimmedPath = rawPath.trim().replace(/^['"]|['"]$/g, ''); // Nettoyage guillemets éventuels
-
-            // Condition d'arrêt pour les chemins supplémentaires
-            if (pathIndex > 1 && (!trimmedPath || trimmedPath.toLowerCase() === 'fin' || trimmedPath.toLowerCase() === 'n')) {
-                break;
-            }
-
-            if (!trimmedPath) {
-                console.log('⚠️ Vous devez renseigner au moins un premier chemin valide.\n');
-                continue;
-            }
-
-            const resolvedPath = path.resolve(trimmedPath);
-
-            if (!fs.existsSync(resolvedPath)) {
-                console.log(`❌ Le chemin "${resolvedPath}" n'existe pas. Veuillez réessayer.\n`);
-                continue;
-            }
-
-            try {
-                fs.accessSync(resolvedPath, fs.constants.R_OK);
-            } catch {
-                console.log(`❌ Droits insuffisants : impossible d'accéder en lecture à "${resolvedPath}" (Permission denied).\n`);
-                continue;
-            }
-
-            const stats = fs.statSync(resolvedPath);
-            const typeStr = stats.isDirectory() ? 'Dossier' : 'Fichier';
-            console.log(`   ✅ ${typeStr} valide : ${resolvedPath}`);
-
-            validSources.push({
-                path: resolvedPath,
-                name: path.basename(resolvedPath),
+        const existingManifest = getRegisteredLocalManifest(gameName);
+        if (existingManifest && existingManifest.sources.length > 0) {
+            console.log(`\n📂 Configuration enregistrée détectée pour "${gameName}" (${existingManifest.sources.length} emplacement(s)) :`);
+            existingManifest.sources.forEach((s, idx) => {
+                console.log(`   ${idx + 1}. [${s.folder}] ➔ ${s.path}`);
             });
+            console.log('');
 
-            pathIndex++;
+            const useChoice = await rl.question('👉 Utiliser ces emplacements enregistrés pour l\'exportation ? (O/n) : ');
+            const trimmed = useChoice.trim().toLowerCase();
+
+            if (trimmed === '' || trimmed === 'o' || trimmed === 'oui' || trimmed === 'y' || trimmed === 'yes') {
+                let allAccessible = true;
+                for (const s of existingManifest.sources) {
+                    if (!fs.existsSync(s.path)) {
+                        console.log(`❌ Le chemin "${s.path}" n'existe plus sur votre disque.`);
+                        allAccessible = false;
+                        break;
+                    }
+                    try {
+                        fs.accessSync(s.path, fs.constants.R_OK);
+                    } catch {
+                        console.log(`❌ Droits de lecture insuffisants sur "${s.path}".`);
+                        allAccessible = false;
+                        break;
+                    }
+                }
+
+                if (allAccessible) {
+                    validSources = existingManifest.sources.map((s) => ({
+                        path: s.path,
+                        name: s.folder,
+                    }));
+                } else {
+                    console.log('⚠️ Certains chemins enregistrés sont inaccessibles. Veuillez les saisir manuellement.\n');
+                }
+            }
+        }
+
+        if (validSources.length === 0) {
+            let pathIndex = 1;
+            console.log(`\n📂 Saisie manuelle des dossiers / fichiers de sauvegarde pour "${gameName}" :`);
+
+            while (true) {
+                const promptText = pathIndex === 1
+                    ? `👉 Chemin de la sauvegarde n°${pathIndex} : `
+                    : `👉 Chemin n°${pathIndex} (laisser vide ou taper 'fin' pour terminer) : `;
+
+                const rawPath = await rl.question(promptText);
+                const trimmedPath = rawPath.trim().replace(/^['"]|['"]$/g, ''); // Nettoyage guillemets éventuels
+
+                // Condition d'arrêt pour les chemins supplémentaires
+                if (pathIndex > 1 && (!trimmedPath || trimmedPath.toLowerCase() === 'fin' || trimmedPath.toLowerCase() === 'n')) {
+                    break;
+                }
+
+                if (!trimmedPath) {
+                    console.log('⚠️ Vous devez renseigner au moins un premier chemin valide.\n');
+                    continue;
+                }
+
+                const resolvedPath = path.resolve(trimmedPath);
+
+                if (!fs.existsSync(resolvedPath)) {
+                    console.log(`❌ Le chemin "${resolvedPath}" n'existe pas. Veuillez réessayer.\n`);
+                    continue;
+                }
+
+                try {
+                    fs.accessSync(resolvedPath, fs.constants.R_OK);
+                } catch {
+                    console.log(`❌ Droits insuffisants : impossible d'accéder en lecture à "${resolvedPath}" (Permission denied).\n`);
+                    continue;
+                }
+
+                const stats = fs.statSync(resolvedPath);
+                const typeStr = stats.isDirectory() ? 'Dossier' : 'Fichier';
+                console.log(`   ✅ ${typeStr} valide : ${resolvedPath}`);
+
+                validSources.push({
+                    path: resolvedPath,
+                    name: path.basename(resolvedPath),
+                });
+
+                pathIndex++;
+            }
         }
 
         console.log('\n------------------------------------------------------');
@@ -132,6 +174,9 @@ export async function runExportCli(existingDrive?: drive_v3.Drive): Promise<void
             console.warn('⚠️ Impossible de supprimer le fichier temporaire local :', cleanupErr);
         }
 
+        // 6.5. Enregistrement du manifest dans le registre local
+        saveLocalManifest(manifest);
+
         // 7. Message de succès final
         console.log('\n======================================================');
         console.log('🎉 SAUVEGARDE EXPORTÉE SUR GOOGLE DRIVE AVEC SUCCÈS !');
@@ -140,6 +185,7 @@ export async function runExportCli(existingDrive?: drive_v3.Drive): Promise<void
         console.log(`📂 Dossier jeu Drive   : ${gameName} (ID: ${result.gameFolderId})`);
         console.log(`📄 Fichier sauvegardé  : ${result.file.name}`);
         console.log(`🆔 ID du fichier Drive : ${result.file.id}`);
+        console.log(`💾 Registre local mis à jour pour "${gameName}".`);
         console.log('======================================================\n');
     } catch (error) {
         console.error('\n❌ Erreur durant l\'exportation de la sauvegarde :', error);
